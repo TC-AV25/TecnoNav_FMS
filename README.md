@@ -33,6 +33,17 @@ just run
 - You can use [the environment](https://github.com/evshary/zenoh_demo_docker_env/tree/main/autoware_fms_with_bridge_ros2dds) to test FMS
   - Remember to change the environment `FMS_CONNECTION`, which means FMS IP.
 
+### Switching Maps
+
+The Map Viewer page includes a dropdown selector that allows you to switch maps directly from the web interface:
+
+1. Navigate to the **Map Viewer** page in the application
+2. Find the **"Select Map"** dropdown in the right panel
+3. Select your desired map from the dropdown
+4. The map will automatically reload with the new selection
+
+All available maps are pre-configured and can be switched instantly without restarting the application.
+
 ### Integration with Carla
 
 Here is [the tutorial](https://autoware-carla-launch.readthedocs.io/en/latest/scenarios/fms.html) how to run FMS with Carla.

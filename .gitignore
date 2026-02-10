@@ -3,3 +3,8 @@ __pycache__
 
 # Ignore poetry
 .venv
+
+#pcds
+
+*.pcd
+*.osm

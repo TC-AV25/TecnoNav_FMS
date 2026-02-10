@@ -1,15 +1,45 @@
 import json
 import time
-
 import zenoh
-from zenoh_ros_type.tier4_autoware_msgs import CpuStatus, CpuUsage, GearShift, TurnSignal, VehicleStatusStamped
+import threading
+import sys
+import os
+import math 
+# --- IMPORTS ---
+# We use the files you already have. 
+# We use Tier4 definitions to read Universe data where compatible (TurnSignal).
+try:
+    # 1. Load Tier4 Types (For CPU & Turn Signal)
+    from zenoh_ros_type.tier4_autoware_msgs import (
+        CpuUsage, 
+        CpuStatus, 
+        TurnSignalStamped, # We will use this to read the Universe Turn message
+        Time
+    )
+    # 2. Load Auto Types (For Gear, Steering, Velocity - you have these)
+    from zenoh_ros_type.autoware_auto_msgs import (
+        GearReport, 
+        SteeringReport, 
+        VelocityReport
+    )
+except ImportError:
+    # Fallback for running as a script directly
+    from zenoh_ros_type.tier4_autoware_msgs import CpuUsage, CpuStatus, TurnSignalStamped, Time
+    from zenoh_ros_type.autoware_auto_msgs import GearReport, SteeringReport, VelocityReport
 
-GET_CPU_KEY_EXPR = '/api/external/get/cpu_usage'
-GET_VEHICLE_STATUS_KEY_EXPR = '/api/external/get/vehicle/status'
 
+# --- CONFIGURATION ---
+TOPIC_CPU       = '/api/external/get/cpu_usage'
+TOPIC_GEAR      = '/vehicle/status/gear_status'
+TOPIC_TURN      = '/vehicle/status/turn_indicators_status'
+TOPIC_STEER     = '/vehicle/status/steering_status'
+TOPIC_VELOCITY  = '/vehicle/status/velocity_status'
 
-def class2dict(instance, built_dict={}):
-    ### Reference: https://stackoverflow.com/questions/63893843/how-to-convert-nested-object-to-nested-dictionary-in-python
+# --- GLOBAL CACHE ---
+VEHICLE_CACHE = {}
+ACTIVE_SUBSCRIBERS = {}
+
+def class2dict(instance):
     if not hasattr(instance, '__dict__'):
         return instance
     new_subdic = vars(instance)
@@ -18,52 +48,144 @@ def class2dict(instance, built_dict={}):
             for i in range(len(new_subdic[key])):
                 new_subdic[key][i] = class2dict(new_subdic[key][i])
         else:
-            new_subdic[key] = class2dict(value)
+            new_subdic[key] = class2dict(round(value, 4)) if isinstance(value, float) else class2dict(value)
     return new_subdic
 
+# --- CALLBACKS ---
+
+def callback_cpu(sample, scope):
+    try:
+        data = CpuUsage.deserialize(sample.payload.to_bytes())
+        d = class2dict(data)
+        try:
+            d['all']['status'] = CpuStatus.STATUS(d['all']['status']).name
+            print(d['all']['status'])
+            for i in range(len(d['cpus'])):
+                d['cpus'][i]['status'] = CpuStatus.STATUS(d['cpus'][i]['status']).name
+        except: pass
+        
+        if scope not in VEHICLE_CACHE: VEHICLE_CACHE[scope] = {}
+        VEHICLE_CACHE[scope]['cpu'] = d
+    except Exception:
+        pass 
+
+def callback_gear(sample, scope):
+    try:
+        # Use GearReport (from your autoware_auto_vehicle_msgs.py)
+        data = GearReport.deserialize(sample.payload.to_bytes())
+        val = data.report 
+        
+        gear_str = "UNKNOWN"
+        # Universe Constants
+        if val == 2: gear_str = "DRIVE"
+        elif val == 20 or val == 3: gear_str = "REVERSE"
+        elif val == 22 or val == 4: gear_str = "PARKING"
+        elif val == 1: gear_str = "NEUTRAL"
+        elif val == 0: gear_str = "NONE"
+        
+        if scope not in VEHICLE_CACHE: VEHICLE_CACHE[scope] = {}
+        VEHICLE_CACHE[scope]['gear'] = gear_str
+    except Exception as e:
+        print(f"[ERROR] Gear Parse: {e}")
+
+def callback_turn(sample, scope):
+    try:
+        # HERE IS THE FIX: Use TurnSignalStamped (from your tier4_external_api_msgs.py)
+        # It fits the binary data perfectly.
+        data = TurnSignalStamped.deserialize(sample.payload.to_bytes())
+        
+        # We access .turn_signal.data as you suggested
+        val = data.turn_signal.data
+        
+        turn_str = "NONE"
+        # Universe Constants (1=Left, 2=Right)
+        if val == 1: turn_str = "LEFT" 
+        elif val == 2: turn_str = "RIGHT"
+        elif val == 3: turn_str = "RIGHT" 
+        
+        if scope not in VEHICLE_CACHE: VEHICLE_CACHE[scope] = {}
+        VEHICLE_CACHE[scope]['turn'] = turn_str
+    except Exception as e:
+        print(f"[ERROR] Turn Parse: {e}")
+
+def callback_steering(sample, scope):
+    try:
+        # Use SteeringReport (from your autoware_auto_vehicle_msgs.py)
+        data = SteeringReport.deserialize(sample.payload.to_bytes())
+        val = data.steering_tire_angle
+        val= val*(180.0/math.pi)  # Convert to degrees
+        val= round(val,2)
+        
+        if scope not in VEHICLE_CACHE: VEHICLE_CACHE[scope] = {}
+        VEHICLE_CACHE[scope]['steer'] = val
+    except Exception as e:
+        print(f"[ERROR] Steer Parse: {e}")
+
+def callback_velocity(sample, scope):
+    try:
+        # Use VelocityReport (from your autoware_auto_vehicle_msgs.py)
+        data = VelocityReport.deserialize(sample.payload.to_bytes())
+        val = data.longitudinal_velocity
+        val= val*(3.6)  # Convert to km/h
+        val= round(val,2)
+        
+        if scope not in VEHICLE_CACHE: VEHICLE_CACHE[scope] = {}
+        VEHICLE_CACHE[scope]['vel'] = val
+    except Exception as e:
+        print(f"[ERROR] Vel Parse: {e}")
+
+
+# --- MANAGER ---
+def ensure_subscribers(session, scope, use_bridge_ros2dds):
+    if scope in ACTIVE_SUBSCRIBERS:
+        return 
+
+    print(f"\n[INIT] Starting background subscribers for {scope}...")
+    ACTIVE_SUBSCRIBERS[scope] = {}
+    if scope not in VEHICLE_CACHE: VEHICLE_CACHE[scope] = {}
+
+    prefix = scope if use_bridge_ros2dds else scope + '/rt'
+
+    def create_sub(topic, callback):
+        full_key = prefix + topic
+        sub = session.declare_subscriber(full_key, lambda s: callback(s, scope))
+        return sub
+
+    ACTIVE_SUBSCRIBERS[scope]['cpu']   = create_sub(TOPIC_CPU, callback_cpu)
+    ACTIVE_SUBSCRIBERS[scope]['gear']  = create_sub(TOPIC_GEAR, callback_gear)
+    ACTIVE_SUBSCRIBERS[scope]['turn']  = create_sub(TOPIC_TURN, callback_turn)
+    ACTIVE_SUBSCRIBERS[scope]['steer'] = create_sub(TOPIC_STEER, callback_steering)
+    ACTIVE_SUBSCRIBERS[scope]['vel']   = create_sub(TOPIC_VELOCITY, callback_velocity)
+    
+    print(f"[INIT] Subscribers active for {scope}")
+
+
+# --- API FUNCTIONS ---
 
 def get_cpu_status(session, scope, use_bridge_ros2dds=True):
-    prefix = scope if use_bridge_ros2dds else scope + '/rt'
-    cpu_key_expr = prefix + GET_CPU_KEY_EXPR
-    print(cpu_key_expr, flush=True)
-    sub = session.declare_subscriber(cpu_key_expr)
-    cpu_status_data = None
-    while cpu_status_data is None:
-        time.sleep(1)
-        for rep in sub:
-            cpu_status_data = CpuUsage.deserialize(rep.payload.to_bytes())
-            break
-    ### Convert object to dictionary
-    cpu_status_data = class2dict(cpu_status_data)
-    cpu_status_data['all']['status'] = CpuStatus.STATUS(cpu_status_data['all']['status']).name
-    for i in range(len(cpu_status_data['cpus'])):
-        cpu_status_data['cpus'][i]['status'] = CpuStatus.STATUS(cpu_status_data['cpus'][i]['status']).name
-    print(cpu_status_data)
-    return cpu_status_data
-
+    ensure_subscribers(session, scope, use_bridge_ros2dds)
+    default_cpu = {'all': {'status': 'WAIT', 'total': 0.0, 'sys':0.0, 'usr':0.0, 'idle':0.0}, 'cpus': []}
+    return VEHICLE_CACHE.get(scope, {}).get('cpu', default_cpu)
 
 def get_vehicle_status(session, scope, use_bridge_ros2dds=True):
-    prefix = scope if use_bridge_ros2dds else scope + '/rt'
-    vehicle_status_key_expr = prefix + GET_VEHICLE_STATUS_KEY_EXPR
-    print(vehicle_status_key_expr, flush=True)
-    sub = session.declare_subscriber(vehicle_status_key_expr)
-    vehicle_status_data = None
-    while vehicle_status_data is None:
-        time.sleep(1)
-        for rep in sub:
-            vehicle_status_data = VehicleStatusStamped.deserialize(rep.payload.to_bytes())
-            break
-    ### Convert object to dictionary
-    vehicle_status_data = class2dict(vehicle_status_data)
-    vehicle_status_data['status']['gear_shift']['data'] = GearShift.DATA(vehicle_status_data['status']['gear_shift']['data']).name
-    vehicle_status_data['status']['turn_signal']['data'] = TurnSignal.DATA(vehicle_status_data['status']['turn_signal']['data']).name
-    print(vehicle_status_data)
-    return vehicle_status_data
-
-
-if __name__ == '__main__':
-    conf = zenoh.Config()
-    conf.insert_json5(zenoh.config.LISTEN_KEY, json.dumps(['tcp/172.17.0.1:7447']))
-    s = zenoh.open(conf)
-    get_cpu_status(s, 'v1')
-    get_vehicle_status(s, 'v1')
+    ensure_subscribers(session, scope, use_bridge_ros2dds)
+    
+    cache = VEHICLE_CACHE.get(scope, {})
+    
+    gear_str = cache.get('gear', "CONNECTING")
+    turn_str = cache.get('turn', "NONE")
+    steer_val = cache.get('steer', 0.0)
+    vel_val = cache.get('vel', 0.0)
+    
+    # Construct Response for React App
+    response = {
+        'status': {
+            'turn_signal': {'data': turn_str},
+            'gear_shift': {'data': gear_str},
+            'steering': {'data': steer_val},
+            'twist': {
+                'linear': {'x': vel_val}
+            }
+        }
+    }
+    return response

@@ -1,0 +1,68 @@
+{
+  "maps": {
+    "town01": {
+      "name": "Town01",
+      "path": "/carla_map/Town01/lanelet2_map.osm",
+      "origin_lat": 0,
+      "origin_lon": 0,
+      "description": "Town01 map"
+    },
+    "tc_frontyard": {
+      "name": "TC Autonomous Frontyard",
+      "path": "/carla_map/TC_autonomous_frontyard/lanelet2_map.osm",
+      "origin_lat": 35.23808753540768,
+      "origin_lon": 139.9009591876285,
+      "description": "TC autonomous frontyard base map"
+    },
+    "tc_frontyard_1lane": {
+      "name": "TC Frontyard 1 Lane",
+      "path": "/carla_map/TC_autonomous_frontyard/1lanelet2_map.osm",
+      "origin_lat": 35.23808753540768,
+      "origin_lon": 139.9009591876285,
+      "description": "TC frontyard with 1 lane"
+    },
+    "tc_frontyard_parking": {
+      "name": "TC Frontyard with Parking",
+      "path": "/carla_map/TC_autonomous_frontyard/lanelet2_map_withparking.osm",
+      "origin_lat": 35.23808753540768,
+      "origin_lon": 139.9009591876285,
+      "description": "TC frontyard with parking area"
+    },
+    "tc_complete": {
+      "name": "TC Complete",
+      "path": "/carla_map/tc_complete/lanelet2_map.osm",
+      "origin_lat": 35.23808753540768,
+      "origin_lon": 139.9009591876285,
+      "description": "TC complete map"
+    },
+    "tc_complete_loop": {
+      "name": "TC Complete Loop",
+      "path": "/carla_map/tc_complete/lanelet2_map_loop.osm",
+      "origin_lat": 35.23808753540768,
+      "origin_lon": 139.9009591876285,
+      "description": "TC complete loop map"
+    },
+    "tc_complete_parking": {
+      "name": "TC Complete Parking",
+      "path": "/carla_map/tc_complete/lanelet2_map_parking.osm",
+      "origin_lat": 35.23808753540768,
+      "origin_lon": 139.9009591876285,
+      "description": "TC complete with parking"
+    },
+    "tcav_office": {
+      "name": "TCAV Office",
+      "path": "/carla_map/tcav_office/lanelet2_map.osm",
+      "origin_lat": 0,
+      "origin_lon": 0,
+      "description": "TCAV office map"
+    },
+    "tcav_office_straight": {
+      "name": "TCAV Office Straight",
+      "path": "/carla_map/tcav_office/lanelet2_map_straight.osm",
+      "origin_lat": 35.23808753540768,
+      "origin_lon": 139.9009591876285,
+      "description": "TCAV office straight path"
+    }
+  },
+  "current_map": "town01"
+}

@@ -1,0 +1,115 @@
+{
+  mode: "peer",
+  connect: {
+    endpoints: [
+      "tcp/172.30.10.52:7887" 
+    ]
+  },
+  transport: {
+    link: {
+      tx: {
+        queue:{
+          batching: {
+            enabled: false,
+          }
+        }
+      }
+    }
+  },
+  plugins: {
+    ros2dds: {
+      allow: {
+        // PUBLISHERS: Traffic flowing FROM FMS -> INTO Autoware (ROS 2)
+        publishers: [
+          // not in ATOM 
+            "/control/command/actuation_cmd",
+            "/api/routing/clear_route",
+            "/api/routing/set_route_points",
+
+            "/control/command/control_cmd",
+            "/control/command/gear_cmd",
+            "/control/current_gate_mode",
+            "/control/command/turn_indicators_cmd",
+            "/control/command/hazard_lights_cmd",
+
+            "/control/gate_mode_cmd",
+            "/external/selected/control_cmd",
+            "/external/selected/gear_cmd",
+            
+            // FMS might try to publish these, keep them allowed just in case
+            "/api/external/set/command/remote/shift", 
+            
+
+            // With the extra bridge
+            "/api/external/get/cpu_usage",
+
+            //Added for vehicle status in new AW:
+            "/vehicle/status/velocity_status",
+            "/vehicle/status/steering_status",
+            "/vehicle/status/control_mode",
+            "/vehicle/status/gear_status",
+            "/vehicle/status/turn_indicators_status",
+            "/vehicle/status/hazard_lights_status",
+            
+            "/api/vehicle/status",
+            "/api/vehicle/kinematics",
+            "/api/routing/route",
+            "/api/external/get/cpu_usage",
+            
+            // --- LIDAR ---
+            "/sensing/lidar/concatenated/pointcloud",
+            
+            // Clock
+            "/clock",
+
+            // Cameras
+            "/sensing/camera/.*"
+        ],
+        
+        // SUBSCRIBERS: Traffic flowing FROM Autoware (ROS 2) -> OUT to FMS
+        subscribers: [
+            // --- LIDAR UPDATED HERE ---
+            "/sensing/lidar/concatenated/pointcloud",
+
+            // --- VEHICLE STATUS ---
+            // The specific /api/external topic is missing, but these individual reports are present:
+            "/vehicle/status/actuation_status",
+            "/vehicle/status/velocity_status",
+            "/vehicle/status/steering_status",
+            "/vehicle/status/control_mode",
+            "/vehicle/status/gear_status",
+            "/vehicle/status/turn_indicators_status",
+            "/vehicle/status/hazard_lights_status",
+            
+            // Added this NEW standard API topic found in your list:
+            "/api/vehicle/status",
+
+            // --- OTHER TELEMETRY ---
+            "/api/vehicle/kinematics",
+            "/api/routing/route",
+            
+            // Clock (Will appear when you connect Carla)
+            "/clock",
+
+            // Cameras (Regex allows all camera topics if they appear later)
+            "/sensing/camera/.*"
+        ],
+        service_servers: [
+            "/api/operation_mode/change_to_autonomous",
+            "/api/operation_mode/change_to_remote",
+            "/api/routing/clear_route",
+            "/api/routing/set_route_points"
+        ],
+        service_clients: [
+            "/all_ignore"
+        ],
+        action_servers: [
+            "/all_ignore"
+        ],
+        action_clients: [
+            "/all_ignore"
+        ]
+      }
+    }
+  }
+}

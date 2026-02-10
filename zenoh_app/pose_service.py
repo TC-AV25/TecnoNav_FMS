@@ -1,5 +1,7 @@
+import logging
 import os
 import time
+import warnings
 
 import zenoh
 from lanelet2.core import BasicPoint3d, GPSPoint
@@ -25,6 +27,8 @@ from zenoh_ros_type.tier4_autoware_msgs import GateMode
 
 from .map_parser import OrientationParser
 
+logger = logging.getLogger(__name__)
+
 GET_POSE_KEY_EXPR = '/api/vehicle/kinematics'
 GET_GOAL_POSE_KEY_EXPR = '/api/routing/route'
 SET_AUTO_MODE_KEY_EXPR = '/api/operation_mode/change_to_autonomous'
@@ -49,13 +53,15 @@ class VehiclePose:
     def initialize(self):
         self.lat = 0.0
         self.lon = 0.0
+        self.heading = 0.0  # heading in degrees (0 = North, 90 = East, etc.)
 
         self.positionX = 0.0
         self.positionY = 0.0
 
         self.topic_prefix = self.scope if self.use_bridge_ros2dds else self.scope + '/rt'
 
-        self.orientationGen = OrientationParser()
+        # Lazy initialize OrientationParser - will be created when first needed
+        self.orientationGen = None
 
         self.goalX = 0.0
         self.goalY = 0.0
@@ -64,7 +70,6 @@ class VehiclePose:
         self.goalValid = False
 
         def callback_position(sample):
-            print('Got message of kinematics of vehicle')
             # print("size of the message (bytes) ", struct.calcsize(sample.payload))
             # print(sample.payload)
             data = VehicleKinematics.deserialize(sample.payload.to_bytes())
@@ -74,6 +79,21 @@ class VehiclePose:
             gps = self.projector.reverse(BasicPoint3d(self.positionX, self.positionY, 0.0))
             self.lat = gps.lat
             self.lon = gps.lon
+            
+            # Extract heading from quaternion orientation
+            # quaternion format: (x, y, z, w)
+            qx = -data.pose.pose.pose.orientation.x
+            qy = -data.pose.pose.pose.orientation.y
+            qz = -data.pose.pose.pose.orientation.z
+            qw = -data.pose.pose.pose.orientation.w
+            
+            # Convert quaternion to yaw (heading)
+            import math
+            siny_cosp = 2 * (qw * qz + qx * qy)
+            cosy_cosp = 1 - 2 * (qy * qy + qz * qz)
+            yaw = math.atan2(siny_cosp, cosy_cosp)
+            # Convert from radians to degrees
+            self.heading = math.degrees(yaw)
 
         def callback_goalPosition(sample):
             print('Got message of route of vehicle')
@@ -95,30 +115,89 @@ class VehiclePose:
         ###### Publishers
         self.publisher_gate_mode = self.session.declare_publisher(self.topic_prefix + SET_GATE_MODE_KEY_EXPR)
 
+    def _ensure_orientation_parser(self):
+        """Lazily initialize OrientationParser if not already done"""
+        if self.orientationGen is not None:
+            return True
+        
+        try:
+            # Suppress all output (including stderr) from lanelet2 parsing
+            import sys
+            import io
+            old_stdout = sys.stdout
+            old_stderr = sys.stderr
+            sys.stdout = io.StringIO()
+            sys.stderr = io.StringIO()
+            
+            try:
+                self.orientationGen = OrientationParser()
+                logger.info(f"OrientationParser initialized successfully for {self.scope}")
+                return True
+            finally:
+                # Restore stdout/stderr
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
+        except Exception as e:
+            logger.error(f"Failed to initialize OrientationParser for {self.scope}: {e}", exc_info=True)
+            return False
+
     def setGoal(self, lat, lon):
-        replies = self.session.get(self.topic_prefix + SET_CLEAR_ROUTE_KEY_EXPR)
+        try:
+            # Ensure OrientationParser is initialized
+            if not self._ensure_orientation_parser():
+                raise RuntimeError(f"OrientationParser initialization failed for {self.scope}")
+                
+            replies = self.session.get(self.topic_prefix + SET_CLEAR_ROUTE_KEY_EXPR)
 
-        for reply in replies:
+            for reply in replies:
+                try:
+                    print(">> Received ('{}': {})".format(reply.ok.key_expr, ClearRouteResponse.deserialize(reply.ok.payload.to_bytes())))
+                except Exception as e:
+                    print(f'Failed to handle response: {e}')
+
+            coordinate = self.projector.forward(GPSPoint(float(lat), float(lon), 0))
+            q = self.orientationGen.genQuaternion_seg(coordinate.x, coordinate.y)
+            request = SetRoutePointsRequest(
+                header=Header(stamp=Time(sec=0, nanosec=0), frame_id='map'),
+                option=RouteOption(allow_goal_modification=False),
+                goal=Pose(position=Point(x=coordinate.x, y=coordinate.y, z=0), orientation=Quaternion(x=q[0], y=q[1], z=q[2], w=q[3])),
+                waypoints=[],
+            ).serialize()
+
+            replies = self.session.get(self.topic_prefix + SET_ROUTE_POINT_KEY_EXPR, payload=request)
+            for reply in replies:
+                try:
+                    print(">> Received ('{}': {})".format(reply.ok.key_expr, SetRoutePointsResponse.deserialize(reply.ok.payload.to_bytes())))
+                except Exception as e:
+                    print(f'Failed to handle response: {e}')
+            logger.info(f"Goal set successfully for {self.scope}: lat={lat}, lon={lon}")
+        except Exception as e:
+            logger.error(f"Error setting goal for {self.scope}: {e}", exc_info=True)
+            raise
+
+    def update_map(self, map_path, origin_lat, origin_lon):
+        self.originX = float(origin_lat)
+        self.originY = float(origin_lon)
+        self.projector = UtmProjector(Origin(self.originX, self.originY))
+        try:
+            # Suppress all output (including stderr) from lanelet2 parsing
+            import sys
+            import io
+            old_stdout = sys.stdout
+            old_stderr = sys.stderr
+            sys.stdout = io.StringIO()
+            sys.stderr = io.StringIO()
+            
             try:
-                print(">> Received ('{}': {})".format(reply.ok.key_expr, ClearRouteResponse.deserialize(reply.ok.payload.to_bytes())))
-            except Exception as e:
-                print(f'Failed to handle response: {e}')
-
-        coordinate = self.projector.forward(GPSPoint(float(lat), float(lon), 0))
-        q = self.orientationGen.genQuaternion_seg(coordinate.x, coordinate.y)
-        request = SetRoutePointsRequest(
-            header=Header(stamp=Time(sec=0, nanosec=0), frame_id='map'),
-            option=RouteOption(allow_goal_modification=False),
-            goal=Pose(position=Point(x=coordinate.x, y=coordinate.y, z=0), orientation=Quaternion(x=q[0], y=q[1], z=q[2], w=q[3])),
-            waypoints=[],
-        ).serialize()
-
-        replies = self.session.get(self.topic_prefix + SET_ROUTE_POINT_KEY_EXPR, payload=request)
-        for reply in replies:
-            try:
-                print(">> Received ('{}': {})".format(reply.ok.key_expr, SetRoutePointsResponse.deserialize(reply.ok.payload.to_bytes())))
-            except Exception as e:
-                print(f'Failed to handle response: {e}')
+                self.orientationGen = OrientationParser(path=map_path, originX=self.originX, originY=self.originY)
+            finally:
+                # Restore stdout/stderr
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
+        except Exception as e:
+            logger.info(f"Failed to update OrientationParser with map {map_path}: {e}")
+            self.orientationGen = None
+            self.orientationGen = None
 
     def engage(self):
         self.publisher_gate_mode.put(GateMode(data=GateMode.DATA['AUTO'].value).serialize())
@@ -142,7 +221,8 @@ class PoseServer:
 
     def findVehicles(self, time=10):
         for scope, vehicle in self.vehicles.items():
-            vehicle.subscriber_pose.undeclare()
+            if vehicle is not None:
+                vehicle.subscriber_pose.undeclare()
 
         self.vehicles = {}
         for _ in range(time):
@@ -158,28 +238,47 @@ class PoseServer:
 
     def constructVehicle(self):
         for scope in self.vehicles.keys():
-            self.vehicles[scope] = VehiclePose(self.session, scope)
+            try:
+                self.vehicles[scope] = VehiclePose(self.session, scope)
+            except Exception as e:
+                print(f"Failed to initialize VehiclePose for {scope}: {e}")
+                self.vehicles[scope] = None
+
+    def update_map(self, map_path, origin_lat, origin_lon):
+        for scope, vehicle in self.vehicles.items():
+            if vehicle is not None:
+                vehicle.update_map(map_path, origin_lat, origin_lon)
 
     def returnPose(self):
         poseInfo = []
         for scope, vehicle in self.vehicles.items():
-            poseInfo.append({'name': scope, 'lat': vehicle.lat, 'lon': vehicle.lon})
+            if vehicle is not None:
+                poseInfo.append({
+                    'name': scope, 
+                    'lat': vehicle.lat, 
+                    'lon': vehicle.lon,
+                    'heading': vehicle.heading
+                })
         return poseInfo
 
     def returnGoalPose(self):
         goalPoseInfo = []
         for scope, vehicle in self.vehicles.items():
-            if vehicle.goalValid:
+            if vehicle is not None and vehicle.goalValid:
                 goalPoseInfo.append({'name': scope, 'lat': vehicle.goalLat, 'lon': vehicle.goalLon})
         return goalPoseInfo
 
     def setGoal(self, scope, lat, lon):
-        if scope in self.vehicles.keys():
+        if scope in self.vehicles.keys() and self.vehicles[scope] is not None:
             self.vehicles[scope].setGoal(lat, lon)
+        else:
+            logger.warning(f"Vehicle {scope} not found or not initialized for goal setting")
 
     def engage(self, scope):
-        if scope in self.vehicles.keys():
+        if scope in self.vehicles.keys() and self.vehicles[scope] is not None:
             self.vehicles[scope].engage()
+        else:
+            logger.warning(f"Vehicle {scope} not found or not initialized for engagement")
 
 
 if __name__ == '__main__':

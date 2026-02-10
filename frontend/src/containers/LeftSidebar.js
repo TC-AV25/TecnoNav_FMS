@@ -23,7 +23,7 @@ function LeftSidebar(){
             </button>
 
                 <li className="mb-2 font-semibold text-xl">
-                    <Link to={'/app/welcome'}>Zenoh Autoware FMS</Link>
+                    <Link to={'/app/welcome'}>TECNONAV DASHBOARD</Link>
                 </li>
                 {
                     routes.map((route, k) => {

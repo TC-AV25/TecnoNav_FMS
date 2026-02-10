@@ -18,6 +18,11 @@
       'tcp/0.0.0.0:7887'
     ]
   },
+  connect: {
+    endpoints: [
+      'tcp/212.161.77.248:7447'
+    ]
+  },
   /*
   scouting: {
     multicast: {

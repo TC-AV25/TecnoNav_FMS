@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { useDispatch, useSelector } from "react-redux"
 import TitleCard from "../../../components/Cards/TitleCard"
 import { getListContent } from "./vehiclelistSlice"
@@ -26,17 +26,24 @@ export const Refresh = (props) => {
     )
 }
 
+
 function Lists() {
     const isLoading = useSelector(state => state.list.isLoading)
     const {list} = useSelector(state => state.list)
     const dispatch = useDispatch()
+    const [initialLoadDone, setInitialLoadDone] = useState(false)
+
     useEffect(() => {
-        dispatch(getListContent())
+        dispatch(getListContent()).then(() => setInitialLoadDone(true))
+        const interval = setInterval(() => {
+            dispatch(getListContent())
+        }, 2000)
+        return () => clearInterval(interval)
     }, [dispatch])
 
     return(
         <>
-            <TitleCard title="Vehicles" topMargin="mt-2" TopSideButtons={<Refresh isLoading={isLoading} />}>
+            <TitleCard title="Vehicles" topMargin="mt-2" TopSideButtons={<Refresh isLoading={!initialLoadDone && isLoading} />}>
             {/* Vehicle list after api call */}
             <div className="overflow-x-auto w-full">
                 <table className="table w-full">
@@ -71,8 +78,8 @@ function Lists() {
                                     <td>
                                         Turn: {v.status.vehicle.status.turn_signal.data}<br/>
                                         Gear: {v.status.vehicle.status.gear_shift.data}<br/>
-                                        Steering: {v.status.vehicle.status.steering.data}<br/>
-                                        Velocity: {v.status.vehicle.status.twist.linear.x}<br/>
+                                        Steering: {v.status.vehicle.status.steering.data}°<br/>
+                                        Velocity: {v.status.vehicle.status.twist.linear.x} km/h<br/>
                                     </td>
                                     </tr>
                                 )

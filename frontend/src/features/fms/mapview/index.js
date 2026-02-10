@@ -1,8 +1,8 @@
-import { useEffect, useState, useRef, forwardRef } from "react"
+import { useEffect, useState, useRef, forwardRef, useCallback } from "react"
 import { useDispatch, useSelector } from "react-redux"
 import TitleCard from "../../../components/Cards/TitleCard"
 import  MapViewer  from "./mapViewer"
-// import { Refresh } from "../vehiclelist"
+import MapSelector from "./MapSelector"
 import { getVehicleList, setVehicleGoal, setEngage } from "./mapViewSlice"
 import axios from 'axios'
 
@@ -120,6 +120,13 @@ function MapPanel() {
     const [goalPose, setGoalPose] = useState([])
 
     const [zoomLevel, setZoomLevel] = useState(17)
+    const [currentMap, setCurrentMap] = useState({
+        path: process.env.REACT_APP_MAP_FILE_PATH,
+        originLat: process.env.REACT_APP_MAP_ORIGIN_LAT,
+        originLon: process.env.REACT_APP_MAP_ORIGIN_LON
+    })
+    const [mapRevision, setMapRevision] = useState(0)
+    const lastMapPathRef = useRef(null)
 
 
 
@@ -152,45 +159,72 @@ function MapPanel() {
         return null;
     }
 
+    const getCurrentMap = useCallback(async () => {
+        try {
+            const response = await axios.get('/map/list-available', { params: { _: Date.now() } });
+            const mapKey = response.data.current_map;
+            const mapInfo = response.data.maps[mapKey];
+            if (mapInfo) {
+                console.log('[MapPanel] current map', { mapKey, path: mapInfo.path });
+                setCurrentMap({
+                    path: mapInfo.path,
+                    originLat: mapInfo.origin_lat,
+                    originLon: mapInfo.origin_lon
+                })
+                if (mapInfo.path && mapInfo.path !== lastMapPathRef.current) {
+                    lastMapPathRef.current = mapInfo.path;
+                    setMapRevision(prev => prev + 1);
+                    console.log('[MapPanel] map path changed, revision', mapInfo.path);
+                }
+            }
+        } catch (error) {
+            console.error('[MapPanel] Failed to fetch current map:', error);
+        }
+    }, [])
+
     useEffect(() => {
         /* Get the position of vehicle */
         const getVehiclePose = async () => {
-            const response = await axios.get('/map/pose', {});
-            let newPose = [];
-            response.data.forEach(e => {
-                newPose.push(
-                    Object.assign({}, {
-                        scope: e.name,
-                        lat: e.lat,
-                        lon: e.lon,
-                        valid: true
-                    })
-                )
-            });
-            
-            // console.log(newPose);
-            setVehiclePose(newPose)
+            try {
+                const response = await axios.get('/map/pose', {});
+                let newPose = [];
+                response.data.forEach(e => {
+                    newPose.push(
+                        Object.assign({}, {
+                            scope: e.name,
+                            lat: e.lat,
+                            lon: e.lon,
+                            heading: (e.heading !== undefined && e.heading !== null) ? e.heading : 0,
+                            valid: true
+                        })
+                    )
+                });
+                setVehiclePose(newPose)
+            } catch (error) {
+                console.error('Failed to fetch vehicle pose:', error);
+            }
         }
 
         const getGoalPose = async () => {
-            const response = await axios.get('/map/goalPose', {});
-            let newPose = [];
-            response.data.forEach(e => {
-                newPose.push(
-                    Object.assign({}, {
-                        scope: e.name,
-                        lat: e.lat,
-                        lon: e.lon,
-                        valid: true
-                    })
-                )
-            });
-            
-            // console.log(newPose);
-            setGoalPose(newPose)
+            try {
+                const response = await axios.get('/map/goalPose', {});
+                let newPose = [];
+                response.data.forEach(e => {
+                    newPose.push(
+                        Object.assign({}, {
+                            scope: e.name,
+                            lat: e.lat,
+                            lon: e.lon,
+                            heading: e.heading,
+                            valid: true
+                        })
+                    )
+                });
+                setGoalPose(newPose)
+            } catch (error) {
+                console.error('Failed to fetch goal pose:', error);
+            }
         }
-
-
 
         /* Get current pose of vehicle every 1 sec after startup */
         const get_pose_interval = setInterval(getVehiclePose, 1000)
@@ -203,8 +237,16 @@ function MapPanel() {
             clearInterval(get_pose_interval)
             clearInterval(get_goalPose_interval)
         }
-
     }, [])
+
+    useEffect(() => {
+        /* Fetch current map on component mount */
+        getCurrentMap()
+    }, [getCurrentMap])
+
+    useEffect(() => {
+        console.log('[MapPanel] currentMap state', currentMap);
+    }, [currentMap])
 
     useEffect(() => {
         if(acquireGoal && clickPose != null){
@@ -218,17 +260,19 @@ function MapPanel() {
             // Set 'acquire' to false
             setAcquireGoal(false);
         }
-      }, [clickPose]);
+      }, [clickPose, acquireGoal]);
     
-    const xmlFilePath = process.env.REACT_APP_MAP_FILE_PATH;
-    const originX = process.env.REACT_APP_MAP_ORIGIN_LAT;
-    const originY = process.env.REACT_APP_MAP_ORIGIN_LON;
+    const xmlFilePath = currentMap.path || process.env.REACT_APP_MAP_FILE_PATH;
+    const originX = currentMap.originLat || process.env.REACT_APP_MAP_ORIGIN_LAT;
+    const originY = currentMap.originLon || process.env.REACT_APP_MAP_ORIGIN_LON;
+    console.log('[MapPanel] xmlFilePath', xmlFilePath, 'revision', mapRevision);
 
     return (
         <>
             <TitleCard title="Map Viewer" TopSideButtons={<RefreshVehicles isLoading={listLoading}/>}>
                 <div className="flex gap-4">
                     <MapViewer 
+                        key={`${xmlFilePath || 'map'}-${mapRevision}`}
                         classname="w-3/5" 
                         xmlFile={xmlFilePath} 
                         center={[originX, originY]} 
@@ -239,9 +283,12 @@ function MapPanel() {
                         zoomLevel={zoomLevel}
                         zoomAction={setZoomLevel}
                     />
-                    <div className="w-2/5 grid grid-rows-10 gap-2">
+                    <div className="w-2/5 grid grid-rows-12 gap-2">
                         <div className="row-span-1">
                             <h6 className="block mb-2 text-2xl font-medium text-gray-900 dark:text-white">Start a new planning</h6>
+                        </div>
+                        <div className="row-span-2">
+                            <MapSelector onMapSwitch={getCurrentMap} />
                         </div>
                         <div className="row-span-4 grid grid-rows-4 gap-4">
                             {/* <div className="row-span-1 grid grid-cols-4 gap-4" >
