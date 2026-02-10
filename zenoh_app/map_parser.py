@@ -5,8 +5,13 @@ import lanelet2
 import numpy as np
 
 # from lanelet2.core import BasicPoint3d, GPSPoint
+import lanelet2
+import numpy as np
+
 from lanelet2.io import Origin
 from lanelet2.projection import UtmProjector
+from lanelet2.core import Point3d
+from lanelet2.geometry import distance
 
 
 def proj_between(p1, p2, p3):
@@ -53,25 +58,76 @@ class OrientationParser:
             self.ways[line.id] = [point for point in line]
 
     def genQuaternion_seg(self, x, y):
-        ### 1. Find the segment(line) nearest with (x, y)
-        min_dis = 2147483647
-        min_dis_id = -1
-        min_dis_yaw = 0
+        """
+        Find the closest lanelet and return quaternion based on lane direction.
+        Uses lanelet2 centerline for accurate direction on curves.
+        """
+        query_point = Point3d(1, x, y, 0)
+        
+        closest_lanelet = None
+        closest_distance = float('inf')
+        closest_yaw = None
+        
+        # Step 1: Find which lane is closest (and the best matching segment direction)
+        try:
+            for lanelet in self.vmap.laneletLayer:
+                dist = distance(lanelet.centerline, query_point)
+                if dist >= closest_distance:
+                    continue
 
-        for lineID, way in self.ways.items():
-            for from_, to_ in zip(way, way[1:]):
-                p1 = np.array([from_.x, from_.y])
-                p2 = np.array([to_.x, to_.y])
-                p3 = np.array([x, y])
-                if proj_between(p1, p2, p3):
-                    dis = point2line(p1, p2, p3)
-                    if dis < min_dis:
-                        print(lineID, dis)
-                        min_dis_id = lineID
-                        min_dis = dis
-                        min_dis_yaw = vec2degree(from_, to_)
-        print(min_dis_id)
-        return [0, 0, math.sin(min_dis_yaw / 2), math.cos(min_dis_yaw / 2)]
+                centerline = lanelet.centerline
+                if len(centerline) < 2:
+                    continue
+
+                # Find closest segment on this centerline
+                lanelet_best_dis = float('inf')
+                lanelet_best_yaw = None
+
+                for idx in range(len(centerline) - 1):
+                    from_ = centerline[idx]
+                    to_ = centerline[idx + 1]
+                    p1 = np.array([from_.x, from_.y])
+                    p2 = np.array([to_.x, to_.y])
+                    p3 = np.array([x, y])
+
+                    if proj_between(p1, p2, p3):
+                        seg_dis = point2line(p1, p2, p3)
+                    else:
+                        # Fallback to endpoint distance when projection is outside
+                        seg_dis = min(np.linalg.norm(p3 - p1), np.linalg.norm(p3 - p2))
+
+                    if seg_dis < lanelet_best_dis:
+                        lanelet_best_dis = seg_dis
+                        lanelet_best_yaw = vec2degree(from_, to_)
+
+                if lanelet_best_yaw is None:
+                    continue
+
+                closest_distance = dist
+                closest_lanelet = lanelet
+                closest_yaw = lanelet_best_yaw
+
+        except Exception as e:
+            print(f"Error finding lanelet: {e}")
+            return [0, 0, 0, 1]
+        
+        if closest_lanelet is None:
+            print("No lanelet found")
+            return [0, 0, 0, 1]
+        
+        # Step 2: Use the direction of the closest lane segment
+        try:
+            if closest_yaw is None:
+                print("No valid lanelet segment found")
+                return [0, 0, 0, 1]
+
+            print(f"Lanelet {closest_lanelet.id}, yaw: {closest_yaw:.2f} rad, distance: {closest_distance:.2f}")
+
+            return [0, 0, math.sin(closest_yaw / 2), math.cos(closest_yaw / 2)]
+
+        except Exception as e:
+            print(f"Error generating quaternion: {e}")
+            return [0, 0, 0, 1]
 
 
 if __name__ == '__main__':

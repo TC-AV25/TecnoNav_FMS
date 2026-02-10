@@ -3,7 +3,7 @@ import {useEffect, useState} from 'react'
 import { Link, useLocation } from 'react-router-dom'
 
 
-function SidebarSubmenu({submenu, name, icon}){
+function SidebarSubmenu({submenu, name, icon, isCollapsed}){
     const location = useLocation()
     const [isExpanded, setIsExpanded] = useState(false)
 
@@ -11,19 +11,19 @@ function SidebarSubmenu({submenu, name, icon}){
     /** Open Submenu list if path found in routes, this is for directly loading submenu routes  first time */
     useEffect(() => {
         if(submenu.filter(m => {return m.path === location.pathname})[0])setIsExpanded(true)
-    }, [])
+    }, [submenu, location.pathname])
 
     return (
         <div className='flex-col'>
 
             {/** Route header */}
-            <div className='w-full' onClick={() => setIsExpanded(!isExpanded)}>
-                {icon} {name} 
-                <ChevronDownIcon className={'w-5 h-5 mt-1 float-right delay-400 duration-500 transition-all  ' + (isExpanded ? 'rotate-180' : '')}/>
+            <div className='w-full cursor-pointer' onClick={() => !isCollapsed && setIsExpanded(!isExpanded)} title={isCollapsed ? name : ""}>
+                {icon} {!isCollapsed && <span>{name}</span>}
+                {!isCollapsed && <ChevronDownIcon className={'w-5 h-5 mt-1 float-right delay-400 duration-500 transition-all  ' + (isExpanded ? 'rotate-180' : '')}/>}
             </div>
 
             {/** Submenu list */}
-            <div className={` w-full `+ (isExpanded ? "" : "hidden")}>
+            {!isCollapsed && <div className={` w-full `+ (isExpanded ? "" : "hidden")}>
                 <ul className={`menu menu-compact`}>
                 {
                     submenu.map((m, k) => {
@@ -32,7 +32,7 @@ function SidebarSubmenu({submenu, name, icon}){
                                 <Link to={m.path}>
                                     {m.icon} {m.name}
                                     {
-                                            location.pathname == m.path ? (<span className="absolute mt-1 mb-1 inset-y-0 left-0 w-1 rounded-tr-md rounded-br-md bg-primary "
+                                            location.pathname === m.path ? (<span className="absolute mt-1 mb-1 inset-y-0 left-0 w-1 rounded-tr-md rounded-br-md bg-primary "
                                                 aria-hidden="true"></span>) : null
                                     }
                                 </Link>
@@ -41,7 +41,7 @@ function SidebarSubmenu({submenu, name, icon}){
                     })
                 }
                 </ul>
-            </div>
+            </div>}
         </div>
     )
 }

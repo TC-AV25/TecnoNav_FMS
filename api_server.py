@@ -28,6 +28,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ✓ Custom filter to suppress only frequent polling endpoints
+class SkipFrequentEndpointsFilter(logging.Filter):
+    def filter(self, record):
+        # Skip logging for frequent polling requests
+        skip_paths = ['/map/pose', '/map/goalPose']
+        return not any(path in record.getMessage() for path in skip_paths)
+
+# Apply filter to uvicorn.access logger
+uvicorn_logger = logging.getLogger('uvicorn.access')
+uvicorn_logger.addFilter(SkipFrequentEndpointsFilter())
+logging.getLogger('fastapi').setLevel(logging.WARNING)
+
 MJPEG_HOST = '0.0.0.0'
 MJPEG_PORT = 5000
 

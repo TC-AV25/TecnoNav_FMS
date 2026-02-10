@@ -96,7 +96,6 @@ class VehiclePose:
             self.heading = math.degrees(yaw)
 
         def callback_goalPosition(sample):
-            print('Got message of route of vehicle')
             data = Route.deserialize(sample.payload.to_bytes())
             if len(data.data) == 1:
                 self.goalX = data.data[0].goal.position.x
@@ -106,6 +105,8 @@ class VehiclePose:
                 self.goalLon = gps.lon
                 print('Echo back goal pose: ', self.goalLat, self.goalLon)
                 self.goalValid = True
+            else:
+                self.goalValid = False
 
         ### Topics
         ###### Subscribers
@@ -220,9 +221,20 @@ class PoseServer:
         self.vehicles = {}
 
     def findVehicles(self, time=10):
+        # ✓ NEW: Save goal data before clearing vehicles
+        goal_backup = {}
         for scope, vehicle in self.vehicles.items():
             if vehicle is not None:
                 vehicle.subscriber_pose.undeclare()
+                # Store goal data if it exists
+                if vehicle.goalValid:
+                    goal_backup[scope] = {
+                        'goalX': vehicle.goalX,
+                        'goalY': vehicle.goalY,
+                        'goalLat': vehicle.goalLat,
+                        'goalLon': vehicle.goalLon,
+                        'goalValid': True
+                    }
 
         self.vehicles = {}
         for _ in range(time):
@@ -232,14 +244,29 @@ class PoseServer:
                 if 'pub' in key_expr:
                     end = key_expr.find(GET_POSE_KEY_EXPR)
                     vehicle = key_expr[:end].split('/')[-1]
-                    print(f'find vehicle {vehicle}')
+                    #print(f'find vehicle {vehicle}')
                     self.vehicles[vehicle] = None
-        self.constructVehicle()
+        # ✓ NEW: Pass goal backup to constructVehicle
+        self.constructVehicle(goal_backup)
 
-    def constructVehicle(self):
+    def constructVehicle(self, goal_backup=None):
+        if goal_backup is None:
+            goal_backup = {}
+            
         for scope in self.vehicles.keys():
             try:
                 self.vehicles[scope] = VehiclePose(self.session, scope)
+                
+                # ✓ NEW: Restore goal data if it was backed up
+                if scope in goal_backup:
+                    restored = goal_backup[scope]
+                    self.vehicles[scope].goalX = restored['goalX']
+                    self.vehicles[scope].goalY = restored['goalY']
+                    self.vehicles[scope].goalLat = restored['goalLat']
+                    self.vehicles[scope].goalLon = restored['goalLon']
+                    self.vehicles[scope].goalValid = restored['goalValid']
+                    print(f"Goal restored for {scope}")
+                    
             except Exception as e:
                 print(f"Failed to initialize VehiclePose for {scope}: {e}")
                 self.vehicles[scope] = None
